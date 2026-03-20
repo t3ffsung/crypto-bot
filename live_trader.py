@@ -27,6 +27,27 @@ def run_bot_cycle():
 
     print(f"\n--- Fetching 1-minute market data ---")
     current_prices = {}
+    print(f"\n--- Checking for Manual Commands ---")
+    manual_orders = get_and_clear_pending_orders()
+    for order in manual_orders:
+        msymbol = order.get('symbol')
+        maction = order.get('action')
+        print(f"⚡ MANUAL OVERRIDE TRIGGERED: {maction} {msymbol}")
+        
+        # We need the current price to execute manually
+        try:
+            m_df = fetch_data(symbol=msymbol, timeframe='1m', limit=2)
+            current_price = m_df.iloc[-1]['close']
+            
+            if maction == "BUY" and msymbol not in trader.positions:
+                trader.buy(msymbol, current_price, timestamp="MANUAL")
+            elif maction == "SELL" and msymbol in trader.positions:
+                trader.sell(msymbol, current_price, timestamp="MANUAL")
+        except Exception as e:
+            print(f"Failed to execute manual trade: {e}")
+
+    print(f"\n--- Fetching 1-minute market data ---")
+    # ... (the rest of your loop continues as normal)
 
     for symbol in SYMBOLS:
         try:
