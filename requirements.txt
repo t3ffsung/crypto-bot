@@ -2,3 +2,4 @@ pandas
 ccxt
 ta
 firebase-admin
+flask
