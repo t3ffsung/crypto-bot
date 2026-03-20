@@ -11,26 +11,30 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Crypto Bot is Alive and Trading!"
+    return "Crypto Bot is Alive and Trading (STRESS TEST MODE)!"
 
 # --- BOT LOGIC ---
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT']
+# Added volatile altcoins to increase trade frequency
+SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'PEPE/USDT']
 trader = TradingEngine()
 last_trade_count = 0 
 
 def run_bot_cycle():
     global last_trade_count
+    
     if not trader.bot_active:
         print("🚨 Circuit breaker active.")
         return
 
-    print(f"\n--- Fetching market data ---")
+    print(f"\n--- Fetching 1-minute market data ---")
     current_prices = {}
 
     for symbol in SYMBOLS:
         try:
-            df = fetch_data(symbol=symbol, limit=200)
+            # FORCE 1-minute timeframe for rapid testing
+            df = fetch_data(symbol=symbol, timeframe='1m', limit=100)
             df = apply_indicators(df)
+            
             latest_candle = df.iloc[-1]
             current_prices[symbol] = latest_candle['close']
             timestamp = latest_candle['timestamp']
@@ -52,9 +56,11 @@ def run_bot_cycle():
     trader.check_circuit_breaker(portfolio_value)
     print(f"Total Value: ${portfolio_value:.2f}")
 
+    # --- FIREBASE SYNC ---
     try:
         update_portfolio_stats(trader.balance, portfolio_value, trader.positions)
         current_trade_count = len(trader.trade_log)
+        
         if current_trade_count > last_trade_count:
             for i in range(last_trade_count, current_trade_count):
                 log_trade_to_db(trader.trade_log[i])
@@ -67,7 +73,8 @@ def run_bot_loop():
     time.sleep(10) # Give the web server a few seconds to boot up first
     while True:
         run_bot_cycle()
-        time.sleep(300)
+        # Sleep for exactly 60 seconds to match the 1-minute candles
+        time.sleep(60)
 
 if __name__ == "__main__":
     # 1. Start the bot logic in a background thread
@@ -75,5 +82,4 @@ if __name__ == "__main__":
     bot_thread.start()
     
     # 2. Start the fake web server to satisfy Render's Free Tier
-    # (Render requires binding to host 0.0.0.0 and defaults to port 10000)
     app.run(host='0.0.0.0', port=10000)
