@@ -4,8 +4,7 @@ from flask import Flask
 from data import fetch_data
 from strategy import apply_indicators, generate_signal
 from trading_engine import TradingEngine
-from database import update_portfolio_stats, log_trade_to_db
-
+from database import update_portfolio_stats, log_trade_to_db, get_and_clear_pending_orders
 # --- FLASK WEB SERVER SETUP ---
 app = Flask(__name__)
 
