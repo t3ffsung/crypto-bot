@@ -31,3 +31,20 @@ def log_trade_to_db(trade_data):
         'timestamp': firestore.SERVER_TIMESTAMP # Ensures perfect chronological sorting
     })
     print(f"☁️ Logged {trade_data['action']} trade to Firestore.")
+    def get_and_clear_pending_orders():
+    """Fetches manual orders from React and deletes them from the queue."""
+    try:
+        db = firestore.client()
+        orders_ref = db.collection('pending_orders')
+        docs = orders_ref.stream()
+        
+        orders = []
+        for doc in docs:
+            order_data = doc.to_dict()
+            orders.append(order_data)
+            doc.reference.delete() # Delete it so we don't execute it twice!
+            
+        return orders
+    except Exception as e:
+        print(f"Queue Error: {e}")
+        return []
