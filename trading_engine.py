@@ -2,7 +2,6 @@ from datetime import datetime
 
 class TradingEngine:
     def __init__(self, saved_state=None):
-        # THE FIX: Load memory if it exists, otherwise start fresh
         if saved_state:
             self.balance = float(saved_state.get('cash_balance', 1000.0))
             self.positions = saved_state.get('positions', {})
@@ -15,37 +14,41 @@ class TradingEngine:
         self.trade_log = []
         self.bot_active = True
 
-    def buy(self, symbol, price, timestamp=None, amount_usdt=None, reason="Strategy"):
+    def buy(self, symbol, price, amount_usdt=None, reason="Strategy"):
         if amount_usdt is None:
             amount_usdt = self.balance * 0.10
             
-        amount_usdt = float(amount_usdt) # Failsafe conversion
+        amount_usdt = float(amount_usdt) 
         
         if self.balance < amount_usdt:
             print(f"Insufficient funds for {symbol}.")
             return
 
         coin_amount = amount_usdt / price
-        fee = amount_usdt * 0.001 # 0.1% Exchange Fee
+        fee = amount_usdt * 0.001 
         total_cost = amount_usdt + fee
 
         self.balance -= total_cost
+        
+        timestamp_str = datetime.now().isoformat()
+        
         self.positions[symbol] = {
             'amount': coin_amount,
             'entry_price': price,
-            'timestamp': timestamp or datetime.now().isoformat()
+            'timestamp': timestamp_str
         }
 
+        # THE FIX: Added 'timestamp' key so React can render it!
         self.trade_log.append({
             'symbol': symbol,
             'action': f'BUY ({reason})',
             'price': price,
             'amount': coin_amount,
             'cost': total_cost,
-            'time': timestamp or datetime.now().isoformat()
+            'timestamp': timestamp_str 
         })
 
-    def sell(self, symbol, price, timestamp=None, reason="Strategy"):
+    def sell(self, symbol, price, reason="Strategy"):
         if symbol not in self.positions:
             return
 
@@ -59,29 +62,30 @@ class TradingEngine:
 
         self.balance += net_revenue
         profit = net_revenue - (coin_amount * entry_price)
+        
+        timestamp_str = datetime.now().isoformat()
 
+        # THE FIX: Added 'timestamp' key so React can render it!
         self.trade_log.append({
             'symbol': symbol,
             'action': f'SELL ({reason})',
             'price': price,
             'amount': coin_amount,
             'profit': profit,
-            'time': timestamp or datetime.now().isoformat()
+            'timestamp': timestamp_str 
         })
 
-    def check_stop_loss_and_take_profit(self, symbol, current_price, timestamp=None):
+    def check_stop_loss_and_take_profit(self, symbol, current_price):
         if symbol in self.positions:
             entry_price = self.positions[symbol]['entry_price']
             
-            # 5% Stop Loss
             if current_price <= entry_price * 0.95:
                 print(f"🛑 STOP LOSS TRIGGERED for {symbol}")
-                self.sell(symbol, current_price, timestamp, reason="Stop Loss")
+                self.sell(symbol, current_price, reason="Stop Loss")
                 
-            # NEW: 10% Take Profit
             elif current_price >= entry_price * 1.10:
                 print(f"🎯 TAKE PROFIT TRIGGERED for {symbol}")
-                self.sell(symbol, current_price, timestamp, reason="Take Profit")
+                self.sell(symbol, current_price, reason="Take Profit")
 
     def get_portfolio_value(self, current_prices):
         value = self.balance
