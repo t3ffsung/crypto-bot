@@ -1,3 +1,4 @@
+import os
 import time
 import threading
 from flask import Flask
@@ -5,6 +6,7 @@ from data import fetch_data
 from strategy import apply_indicators, generate_signal
 from trading_engine import TradingEngine
 from database import update_portfolio_stats, log_trade_to_db, get_and_clear_pending_orders
+
 # --- FLASK WEB SERVER SETUP ---
 app = Flask(__name__)
 
@@ -13,7 +15,6 @@ def home():
     return "Crypto Bot is Alive and Trading (STRESS TEST MODE)!"
 
 # --- BOT LOGIC ---
-# Added volatile altcoins to increase trade frequency
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'PEPE/USDT']
 trader = TradingEngine()
 last_trade_count = 0 
@@ -25,29 +26,29 @@ def run_bot_cycle():
         print("🚨 Circuit breaker active.")
         return
 
-    print(f"\n--- Fetching 1-minute market data ---")
-    current_prices = {}
     print(f"\n--- Checking for Manual Commands ---")
     manual_orders = get_and_clear_pending_orders()
     for order in manual_orders:
         msymbol = order.get('symbol')
         maction = order.get('action')
-        print(f"⚡ MANUAL OVERRIDE TRIGGERED: {maction} {msymbol}")
+        custom_amount = order.get('amount_usdt', 0)
         
-        # We need the current price to execute manually
+        print(f"⚡ MANUAL OVERRIDE TRIGGERED: {maction} {msymbol} for ${custom_amount}")
+        
         try:
+            # We need the current price to execute manually
             m_df = fetch_data(symbol=msymbol, timeframe='1m', limit=2)
             current_price = m_df.iloc[-1]['close']
             
             if maction == "BUY" and msymbol not in trader.positions:
-                trader.buy(msymbol, current_price, timestamp="MANUAL")
+                trader.buy(msymbol, current_price, timestamp="MANUAL", amount_usdt=custom_amount)
             elif maction == "SELL" and msymbol in trader.positions:
                 trader.sell(msymbol, current_price, timestamp="MANUAL")
         except Exception as e:
             print(f"Failed to execute manual trade: {e}")
 
     print(f"\n--- Fetching 1-minute market data ---")
-    # ... (the rest of your loop continues as normal)
+    current_prices = {}
 
     for symbol in SYMBOLS:
         try:
@@ -70,7 +71,8 @@ def run_bot_cycle():
                 print(f"🔴 SELL {symbol}")
                 
         except Exception as e:
-            pass
+            # Print the error so we can see if Binance rate-limits us
+            print(f"⚠️ Error with {symbol}: {e}")
 
     portfolio_value = trader.get_portfolio_value(current_prices)
     trader.check_circuit_breaker(portfolio_value)
@@ -101,5 +103,6 @@ if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot_loop)
     bot_thread.start()
     
-    # 2. Start the fake web server to satisfy Render's Free Tier
-    app.run(host='0.0.0.0', port=10000)
+    # 2. Start the fake web server using Render's dynamic port
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
