@@ -32,7 +32,6 @@ def sync_to_firebase():
     portfolio_value = trader.get_portfolio_value(global_prices)
     trader.check_circuit_breaker(portfolio_value)
     
-    # THE FIX: Updated to 3000 baseline
     lifetime_pnl = trader.balance - 3000.0
     try:
         update_portfolio_stats(trader.balance, portfolio_value, trader.positions, lifetime_pnl)
@@ -59,13 +58,10 @@ def on_manual_order(col_snapshot, changes, read_time):
             with trade_lock:
                 if current_price > 0:
                     if maction == "CLOSE":
-                        print(f"\n⚡ MANUAL LIQUIDATION: {msymbol}")
                         trader.close_position(msymbol, current_price, reason="Manual Liquidate")
                     elif maction == "BUY":
-                        print(f"\n⚡ MANUAL LONG: {msymbol}")
                         trader.buy(msymbol, current_price, amount_usdt=amount_usdt if amount_usdt else None, amount_coin=amount_coin if amount_coin else None, reason="Manual")
                     elif maction == "SELL":
-                        print(f"\n⚡ MANUAL SHORT: {msymbol}")
                         trader.sell(msymbol, current_price, amount_usdt=amount_usdt if amount_usdt else None, amount_coin=amount_coin if amount_coin else None, reason="Manual")
                 sync_to_firebase()
             change.document.reference.delete()
@@ -97,7 +93,8 @@ def run_bot_cycle():
                         trader.sell(symbol, latest['close'])
                         sync_to_firebase()
         except Exception as e:
-            pass
+            # THE FIX: If Binance blocks us, print the exact error to the terminal!
+            print(f"⚠️ Skipping {symbol} | Error: {e}")
             
     with trade_lock: sync_to_firebase()
     print(f"[ ✅ ] Cycle complete. Portfolio: ${trader.get_portfolio_value(global_prices):.2f}")
