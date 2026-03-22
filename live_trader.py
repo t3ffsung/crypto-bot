@@ -1,99 +1,120 @@
 import os
+import sys
 import time
 import threading
 from flask import Flask
 from data import fetch_data
 from strategy import apply_indicators, generate_signal
 from trading_engine import TradingEngine
-from database import update_portfolio_stats, log_trade_to_db, get_and_clear_pending_orders, load_portfolio_stats
+from database import update_portfolio_stats, log_trade_to_db, load_portfolio_stats, get_db_client
 
 app = Flask(__name__)
-
 @app.route('/')
-def home():
-    return "Crypto Bot is Alive, Remembering, and Trading!"
+def home(): return "Quantum HFT Engine is Live!"
 
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'PEPE/USDT']
+SYMBOLS = [
+    'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'SOL/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
+    'LINK/USDT', 'BCH/USDT', 'TRX/USDT', 'XLM/USDT', 'ATOM/USDT', 'XMR/USDT', 'ETC/USDT', 'ALGO/USDT', 'VET/USDT', 'FIL/USDT',
+    'PEPE/USDT', 'WIF/USDT', 'FLOKI/USDT', 'BONK/USDT', 'SHIB/USDT', 'AVAX/USDT', 'NEAR/USDT', 'RNDR/USDT', 'FET/USDT', 'INJ/USDT',
+    'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'APT/USDT', 'SEI/USDT', 'TIA/USDT', 'JUP/USDT', 'ORDI/USDT', 'RUNE/USDT', 'BOME/USDT'
+]
+
+MAX_OPEN_POSITIONS = 30
+global_prices = {}
 
 saved_state = load_portfolio_stats()
 trader = TradingEngine(saved_state)
 last_trade_count = 0 
+trade_lock = threading.Lock()
 
-def run_bot_cycle():
+def sync_to_firebase():
     global last_trade_count
-    if not trader.bot_active:
-        return
-
-    print(f"\n--- Checking Manual Queue ---")
-    manual_orders = get_and_clear_pending_orders()
-    for order in manual_orders:
-        msymbol = order.get('symbol')
-        maction = order.get('action')
-        custom_amount = float(order.get('amount_usdt', 0))
-        
-        # THE FIX: Grab price straight from React. No API call to Binance needed!
-        current_price = float(order.get('price', 0)) 
-        
-        try:
-            if current_price > 0:
-                if maction == "BUY" and msymbol not in trader.positions:
-                    print(f"⚡ EXECUTING MANUAL BUY: {msymbol} for ${custom_amount}")
-                    trader.buy(msymbol, current_price, amount_usdt=custom_amount, reason="Manual")
-                elif maction == "SELL" and msymbol in trader.positions:
-                    print(f"⚡ EXECUTING MANUAL SELL: {msymbol}")
-                    trader.sell(msymbol, current_price, reason="Manual")
-        except Exception as e:
-            print(f"Manual Trade Failed: {e}")
-
-    print(f"--- Fetching Market Data ---")
-    current_prices = {}
-
-    for symbol in SYMBOLS:
-        try:
-            df = fetch_data(symbol=symbol, timeframe='1m', limit=100)
-            df = apply_indicators(df)
-            latest_candle = df.iloc[-1]
-            current_prices[symbol] = latest_candle['close']
-            
-            trader.check_stop_loss_and_take_profit(symbol, latest_candle['close'])
-            signal = generate_signal(latest_candle)
-            
-            if signal == "BUY" and symbol not in trader.positions:
-                trader.buy(symbol, latest_candle['close'])
-                print(f"🟢 AUTO BUY {symbol}")
-            elif signal == "SELL" and symbol in trader.positions:
-                trader.sell(symbol, latest_candle['close'])
-                print(f"🔴 AUTO SELL {symbol}")
-        except Exception as e:
-            pass
-
-    portfolio_value = trader.get_portfolio_value(current_prices)
+    portfolio_value = trader.get_portfolio_value(global_prices)
     trader.check_circuit_breaker(portfolio_value)
-
+    
+    # THE FIX: Updated to 3000 baseline
+    lifetime_pnl = trader.balance - 3000.0
     try:
-        update_portfolio_stats(trader.balance, portfolio_value, trader.positions)
+        update_portfolio_stats(trader.balance, portfolio_value, trader.positions, lifetime_pnl)
         current_trade_count = len(trader.trade_log)
-        
         if current_trade_count > last_trade_count:
             for i in range(last_trade_count, current_trade_count):
                 log_trade_to_db(trader.trade_log[i])
             last_trade_count = current_trade_count
     except Exception as e:
-         print(f"⚠️ Firebase Sync Error: {e}")
+         pass
+
+def on_manual_order(col_snapshot, changes, read_time):
+    for change in changes:
+        if change.type.name == 'ADDED':
+            order = change.document.to_dict()
+            msymbol = order.get('symbol')
+            maction = order.get('action')
+            amount_usdt = float(order.get('amount_usdt', 0))
+            amount_coin = float(order.get('amount_coin', 0))
+            current_price = float(order.get('price', 0))
+            
+            global_prices[msymbol] = current_price
+            
+            with trade_lock:
+                if current_price > 0:
+                    if maction == "CLOSE":
+                        print(f"\n⚡ MANUAL LIQUIDATION: {msymbol}")
+                        trader.close_position(msymbol, current_price, reason="Manual Liquidate")
+                    elif maction == "BUY":
+                        print(f"\n⚡ MANUAL LONG: {msymbol}")
+                        trader.buy(msymbol, current_price, amount_usdt=amount_usdt if amount_usdt else None, amount_coin=amount_coin if amount_coin else None, reason="Manual")
+                    elif maction == "SELL":
+                        print(f"\n⚡ MANUAL SHORT: {msymbol}")
+                        trader.sell(msymbol, current_price, amount_usdt=amount_usdt if amount_usdt else None, amount_coin=amount_coin if amount_coin else None, reason="Manual")
+                sync_to_firebase()
+            change.document.reference.delete()
+
+watch = get_db_client().collection('pending_orders').on_snapshot(on_manual_order)
+
+def run_bot_cycle():
+    if not trader.bot_active: return
+    print(f"\n[ ⏳ ] Scanning. Open Positions: {len(trader.positions)}/{MAX_OPEN_POSITIONS}")
+    
+    for symbol in SYMBOLS:
+        try:
+            df = fetch_data(symbol=symbol, timeframe='1m', limit=300)
+            df = apply_indicators(df)
+            latest = df.iloc[-1]
+            global_prices[symbol] = latest['close']
+            
+            with trade_lock:
+                if symbol in trader.positions:
+                    trader.check_stop_loss_and_take_profit(symbol, latest['close'])
+                elif len(trader.positions) < MAX_OPEN_POSITIONS:
+                    signal = generate_signal(latest)
+                    if signal == "BUY":
+                        print(f"🤖 AUTO LONG {symbol} ($100)")
+                        trader.buy(symbol, latest['close'])
+                        sync_to_firebase()
+                    elif signal == "SELL":
+                        print(f"🤖 AUTO SHORT {symbol} ($100)")
+                        trader.sell(symbol, latest['close'])
+                        sync_to_firebase()
+        except Exception as e:
+            pass
+            
+    with trade_lock: sync_to_firebase()
+    print(f"[ ✅ ] Cycle complete. Portfolio: ${trader.get_portfolio_value(global_prices):.2f}")
 
 def run_bot_loop():
     time.sleep(5)
     while True:
-        # THE FIX: The Immortal Thread. This prevents the bot from ever dying silently.
-        try:
-            run_bot_cycle()
-        except Exception as e:
-            print(f"🔥 FATAL BOT THREAD ERROR: {e} - Rebooting cycle...")
-        
-        time.sleep(60)
+        try: run_bot_cycle()
+        except Exception as e: print(f"🔥 FATAL ERROR: {e}")
+        time.sleep(60) 
 
 if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_bot_loop)
-    bot_thread.start()
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    try:
+        bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+        bot_thread.start()
+        port = int(os.environ.get('PORT', 10000))
+        app.run(host='0.0.0.0', port=port)
+    except KeyboardInterrupt:
+        print("\n🛑 SHUTTING DOWN QUANTUM ENGINE...")
+        os._exit(0)
