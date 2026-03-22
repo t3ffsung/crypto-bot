@@ -32,9 +32,10 @@ def sync_to_firebase():
     portfolio_value = trader.get_portfolio_value(global_prices)
     trader.check_circuit_breaker(portfolio_value)
     
-    lifetime_pnl = trader.balance - 3000.0
+    lifetime_pnl = trader.balance - 30000.0
     try:
-        update_portfolio_stats(trader.balance, portfolio_value, trader.positions, lifetime_pnl)
+        # Pass the total fees to the database
+        update_portfolio_stats(trader.balance, portfolio_value, trader.positions, lifetime_pnl, trader.total_fees_paid)
         current_trade_count = len(trader.trade_log)
         if current_trade_count > last_trade_count:
             for i in range(last_trade_count, current_trade_count):
@@ -70,9 +71,22 @@ watch = get_db_client().collection('pending_orders').on_snapshot(on_manual_order
 
 def run_bot_cycle():
     if not trader.bot_active: return
-    print(f"\n[ ⏳ ] Scanning. Open Positions: {len(trader.positions)}/{MAX_OPEN_POSITIONS}")
     
-    for symbol in SYMBOLS:
+    # --- THE SMART SCANNER ---
+    symbols_to_scan = list(trader.positions.keys()) # Always monitor open trades
+    can_open_new = trader.balance >= 1000.0 and len(trader.positions) < MAX_OPEN_POSITIONS
+    
+    if can_open_new:
+        # We have margin. Add all other symbols to the scan list.
+        for sym in SYMBOLS:
+            if sym not in symbols_to_scan:
+                symbols_to_scan.append(sym)
+        print(f"\n[ ⏳ ] Full Scan Active ({len(symbols_to_scan)} assets). Open: {len(trader.positions)}/{MAX_OPEN_POSITIONS}")
+    else:
+        # We are broke or maxed out. Skip the heavy processing.
+        print(f"\n[ 🛡️ ] Margin < $1000. Deep Scan Paused. Monitoring {len(symbols_to_scan)} open trades.")
+
+    for symbol in symbols_to_scan:
         try:
             df = fetch_data(symbol=symbol, timeframe='1m', limit=300)
             df = apply_indicators(df)
@@ -82,18 +96,17 @@ def run_bot_cycle():
             with trade_lock:
                 if symbol in trader.positions:
                     trader.check_stop_loss_and_take_profit(symbol, latest['close'])
-                elif len(trader.positions) < MAX_OPEN_POSITIONS:
+                elif can_open_new: # Only look for signals if we have cash
                     signal = generate_signal(latest)
                     if signal == "BUY":
-                        print(f"🤖 AUTO LONG {symbol} ($100)")
+                        print(f"🤖 AUTO LONG {symbol} ($1000)")
                         trader.buy(symbol, latest['close'])
                         sync_to_firebase()
                     elif signal == "SELL":
-                        print(f"🤖 AUTO SHORT {symbol} ($100)")
+                        print(f"🤖 AUTO SHORT {symbol} ($1000)")
                         trader.sell(symbol, latest['close'])
                         sync_to_firebase()
         except Exception as e:
-            # THE FIX: If Binance blocks us, print the exact error to the terminal!
             print(f"⚠️ Skipping {symbol} | Error: {e}")
             
     with trade_lock: sync_to_firebase()
