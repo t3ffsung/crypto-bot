@@ -18,15 +18,16 @@ def load_portfolio_stats():
         print(f"Error loading memory: {e}")
     return None
 
-# THE FIX: Added lifetime_pnl to the database sync
-def update_portfolio_stats(cash_balance, total_value, positions, lifetime_pnl=0.0):
+# Added total_fees_paid to the sync
+def update_portfolio_stats(cash_balance, total_value, positions, lifetime_pnl=0.0, total_fees_paid=0.0):
     db = firestore.client()
     doc_ref = db.collection('bot_stats').document('live_portfolio')
     doc_ref.set({
         'cash_balance': cash_balance,
         'total_value': total_value,
         'positions': positions,
-        'lifetime_pnl': lifetime_pnl, 
+        'lifetime_pnl': lifetime_pnl,
+        'total_fees_paid': total_fees_paid,
         'last_updated': firestore.SERVER_TIMESTAMP
     })
 
