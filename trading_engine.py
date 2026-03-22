@@ -3,20 +3,22 @@ from datetime import datetime
 class TradingEngine:
     def __init__(self, saved_state=None):
         if saved_state:
-            self.balance = float(saved_state.get('cash_balance', 3000.0))
+            self.balance = float(saved_state.get('cash_balance', 30000.0))
+            self.total_fees_paid = float(saved_state.get('total_fees_paid', 0.0))
             self.positions = saved_state.get('positions', {})
             print(f"🧠 Memory Loaded! Starting Cash: ${self.balance:.2f}")
         else:
-            self.balance = 3000.0
+            self.balance = 30000.0
+            self.total_fees_paid = 0.0
             self.positions = {}
-            print("🧠 Clean Slate. Starting Cash: $3000.00")
+            print("🧠 Clean Slate. Starting Cash: $30000.00")
             
         self.trade_log = []
         self.bot_active = True
 
     def _calculate_amount(self, price, amount_usdt, amount_coin):
         if amount_usdt is None and amount_coin is None:
-            amount_usdt = 100.0 
+            amount_usdt = 1000.0 # Increased trade size to $1k
         if amount_coin:
             return float(amount_coin) * price, float(amount_coin)
         return float(amount_usdt), float(amount_usdt) / price
@@ -26,13 +28,14 @@ class TradingEngine:
             return self.close_position(symbol, price, reason="Buy to Cover Short")
 
         margin_usdt, coin_amount = self._calculate_amount(price, amount_usdt, amount_coin)
-        fee = margin_usdt * 0.001 
+        fee = margin_usdt * 0.0005 # 0.05% Futures Taker Fee
         
         if self.balance < (margin_usdt + fee):
             print(f"⚠️ Insufficient margin for LONG on {symbol}.")
             return False
 
         self.balance -= (margin_usdt + fee)
+        self.total_fees_paid += fee # Track fees paid
         timestamp_str = datetime.now().isoformat()
         
         if symbol in self.positions:
@@ -52,13 +55,14 @@ class TradingEngine:
             return self.close_position(symbol, price, reason="Sell to Close Long")
 
         margin_usdt, coin_amount = self._calculate_amount(price, amount_usdt, amount_coin)
-        fee = margin_usdt * 0.001 
+        fee = margin_usdt * 0.0005 # 0.05% Futures Taker Fee
         
         if self.balance < (margin_usdt + fee):
             print(f"⚠️ Insufficient margin for SHORT on {symbol}.")
             return False
 
         self.balance -= (margin_usdt + fee) 
+        self.total_fees_paid += fee # Track fees paid
         timestamp_str = datetime.now().isoformat()
         
         if symbol in self.positions:
@@ -83,8 +87,10 @@ class TradingEngine:
 
         position_value = coin_amount * current_price
         margin_used = coin_amount * entry_price
-        entry_fee = margin_used * 0.001
-        exit_fee = position_value * 0.001
+        entry_fee = margin_used * 0.0005
+        exit_fee = position_value * 0.0005
+
+        self.total_fees_paid += exit_fee # Track exit fee
 
         if pos_type == 'LONG':
             gross_profit = position_value - margin_used
@@ -102,20 +108,19 @@ class TradingEngine:
         pos = self.positions[symbol]
         entry = pos['entry_price']
         
-        # --- THE STRICT 1:2 RISK/REWARD SCALPING LOGIC ---
         if pos['type'] == 'LONG':
-            if current_price <= entry * 0.99: # 1% Drop
+            if current_price <= entry * 0.99: 
                 print(f"🛑 LONG STOP LOSS HIT: {symbol} (-1%)")
                 self.close_position(symbol, current_price, reason="Stop Loss (1%)")
-            elif current_price >= entry * 1.02: # 2% Pump
+            elif current_price >= entry * 1.02: 
                 print(f"🎯 LONG TAKE PROFIT HIT: {symbol} (+2%)")
                 self.close_position(symbol, current_price, reason="Take Profit (2%)")
                 
         elif pos['type'] == 'SHORT':
-            if current_price >= entry * 1.01: # 1% Pump (Against the short)
+            if current_price >= entry * 1.01: 
                 print(f"🛑 SHORT STOP LOSS HIT: {symbol} (-1%)")
                 self.close_position(symbol, current_price, reason="Stop Loss (1%)")
-            elif current_price <= entry * 0.98: # 2% Drop (In favor of the short)
+            elif current_price <= entry * 0.98: 
                 print(f"🎯 SHORT TAKE PROFIT HIT: {symbol} (+2%)")
                 self.close_position(symbol, current_price, reason="Take Profit (2%)")
 
@@ -132,4 +137,4 @@ class TradingEngine:
         return value
 
     def check_circuit_breaker(self, current_value):
-        if current_value < 2000.0: self.bot_active = False # Stop if we lose $1000 total
+        if current_value < 20000.0: self.bot_active = False
